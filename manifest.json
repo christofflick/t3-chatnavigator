@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "T3 Chat Navigation",
+  "version": "1.0",
+  "description": "Adds a message navigation sidebar to t3.chat for easy message history browsing",
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": ["https://t3.chat/*"],
+  "action": {},
+
+  "content_scripts": [
+    {
+      "matches": ["https://t3.chat/*"],
+      "js": ["content.js"],
+      "css": ["sidebar.css"]
+    }
+  ]
+}
