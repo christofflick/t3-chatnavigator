@@ -132,10 +132,22 @@ new MutationObserver(() => {
   const currentUrl = location.href
   if (currentUrl !== lastUrl) {
     lastUrl = currentUrl
-    // Initialize messages for new chat
-    initializeMessages()
-    // Re-initialize button
-    startButtonGroupObserving()
+    // Clear existing messages immediately when URL changes
+    messageList.innerHTML = ''
+
+    // If we're on the root URL, show no messages and return
+    if (currentUrl === 'https://t3.chat/' || currentUrl === 'https://t3.chat') {
+      showNoMessages()
+      return
+    }
+
+    // Add a small delay to ensure the new chat content is loaded
+    setTimeout(() => {
+      // Initialize messages for new chat
+      initializeMessages(0)
+      // Re-initialize button
+      startButtonGroupObserving()
+    }, 500)
   }
 }).observe(document, { subtree: true, childList: true })
 
@@ -150,15 +162,14 @@ function showNoMessages() {
 
 // Function to get all messages
 function getAllMessages() {
-  return Array.from(
-    document.querySelectorAll('div[role="article"][aria-label="Your message"]')
-  )
+  return Array.from(document.querySelectorAll('[data-message-id].justify-end'))
 }
 
 // Function to clear and update messages
 function updateMessages() {
   // Get all messages for current chat
   const messages = getAllMessages()
+  console.log(messages)
 
   if (messages.length === 0) {
     showNoMessages()
@@ -188,21 +199,34 @@ function updateMessages() {
 
 // Function to initialize messages with retry
 function initializeMessages(retryCount = 0) {
-  const messages = getAllMessages()
-
-  if (messages.length === 0 && retryCount < 5) {
-    // If no messages found and haven't exceeded retry limit, try again
-    setTimeout(() => initializeMessages(retryCount + 1), 200)
+  const currentUrl = location.href
+  // If we're on the root URL, show no messages and return
+  if (currentUrl === 'https://t3.chat/' || currentUrl === 'https://t3.chat') {
+    console.log('No messages')
+    showNoMessages()
     return
   }
 
-  // Clear existing messages only during initialization
-  messageList.innerHTML = ''
+  const messages = getAllMessages()
+
+  if (messages.length === 0 && retryCount < 10) {
+    // Increased retry count
+    // If no messages found and haven't exceeded retry limit, try again with exponential backoff
+    const retryDelay = Math.min(200 * Math.pow(2, retryCount), 2000) // Exponential backoff up to 2 seconds
+    setTimeout(() => initializeMessages(retryCount + 1), retryDelay)
+    return
+  }
 
   // Clear processed state from all messages
   messages.forEach(message => {
     delete message.dataset.processed
   })
+
+  // If we still have no messages after all retries, show the no messages state
+  if (messages.length === 0) {
+    showNoMessages()
+    return
+  }
 
   updateMessages()
 }
@@ -215,11 +239,11 @@ function highlightActiveMessage(messageElement) {
   })
 
   // Find and highlight the corresponding sidebar item
-  const messageId =
-    messageElement.closest('[data-message-id]')?.dataset.messageId
+  const messageId = messageElement.closest('[data-message-id].justify-end')
+    ?.dataset.messageId
   if (messageId) {
     const sidebarItem = document.querySelector(
-      `.t3-chat-message-item[data-message-id="${messageId}"]`
+      `.t3-chat-message-item[data-message-id="${messageId}"].justify-end`
     )
     if (sidebarItem) {
       sidebarItem.classList.add(
@@ -237,10 +261,10 @@ function cleanMessageContent(messageContent) {
 // Function to add a message to the sidebar
 function addMessageToSidebar(messageElement) {
   const messageContent = messageElement.querySelector('.prose').textContent
-  const hasImage =
-    messageElement.querySelector('img[alt="Attached image"]') !== null
-  const messageId =
-    messageElement.closest('[data-message-id]')?.dataset.messageId
+  const imageElement = messageElement.querySelector('img[alt="Attached image"]')
+  const hasImage = imageElement !== null
+  const messageId = messageElement.closest('[data-message-id].justify-end')
+    ?.dataset.messageId
 
   if (!messageId) return
 
@@ -257,7 +281,7 @@ function addMessageToSidebar(messageElement) {
       ${
         hasImage
           ? `
-        <div class="flex-shrink-0 text-muted-foreground">
+        <div class="flex-shrink-0 text-muted-foreground relative group/image" data-image-preview="${imageElement.src}">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-image">
             <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
             <circle cx="9" cy="9" r="2"/>
@@ -273,23 +297,14 @@ function addMessageToSidebar(messageElement) {
   // Add click handler to scroll to the message
   messageItem.addEventListener('click', () => {
     const targetMessage = document.querySelector(
-      `[data-message-id="${messageId}"]`
+      `[data-message-id="${messageId}"].justify-end`
     )
-    const scrollContainer = document.querySelector('div.overflow-y-scroll')
 
-    if (targetMessage && scrollContainer) {
-      // Get the message's position relative to the document
-      const messageRect = targetMessage.getBoundingClientRect()
-      const containerRect = scrollContainer.getBoundingClientRect()
-
-      // Calculate the scroll position needed to show the message at the top of the container
-      const scrollTop =
-        messageRect.top + scrollContainer.scrollTop - containerRect.top
-
-      // Smooth scroll to the calculated position
-      scrollContainer.scrollTo({
-        top: scrollTop,
-        behavior: 'smooth'
+    if (targetMessage) {
+      // Use scrollIntoView with smooth behavior
+      targetMessage.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center' // Center the message in the viewport
       })
 
       // Highlight the message
@@ -309,10 +324,8 @@ const observer = new MutationObserver(mutations => {
   mutations.forEach(mutation => {
     mutation.addedNodes.forEach(node => {
       if (node.nodeType === Node.ELEMENT_NODE) {
-        // Check for new messages
-        const messages = node.querySelectorAll(
-          'div[role="article"][aria-label="Your message"]'
-        )
+        // Check for new messages using data-message-id
+        const messages = node.querySelectorAll('[data-message-id].justify-end')
         if (messages.length > 0) {
           shouldUpdate = true
         }
@@ -330,23 +343,83 @@ const observer = new MutationObserver(mutations => {
 })
 
 // Start observing the chat container
-function startObserving() {
-  const chatContainer = document.querySelector('main')
+function startObserving(retryCount = 0) {
+  const chatContainer = document.querySelector(
+    '.absolute\\.inset-0\\.overflow-y-scroll\\.sm\\:pt-3\\.5'
+  )
   if (chatContainer) {
     observer.observe(chatContainer, {
       childList: true,
       subtree: true
     })
     // Initialize messages after observer is set up
-    initializeMessages()
+    initializeMessages(retryCount)
   } else {
-    // If chat container isn't found, try again after a short delay
-    setTimeout(startObserving, 1000)
+    // If chat container isn't found, try again with increasing delays
+    const retryDelay = Math.min(1000 * Math.pow(2, retryCount), 5000) // Exponential backoff up to 5 seconds
+    setTimeout(() => startObserving(retryCount + 1), retryDelay)
   }
 }
 
 // Initialize the observer
-startObserving()
+startObserving(0)
 
 // Initial message load
-initializeMessages()
+initializeMessages(0)
+
+// Create and manage the tooltip element
+let tooltip = null
+function createTooltip() {
+  if (!tooltip) {
+    tooltip = document.createElement('div')
+    tooltip.style.zIndex = '999999'
+    tooltip.className =
+      'fixed bg-background border w-32 h-32 border-border rounded-md shadow-lg p-1 hidden'
+    tooltip.innerHTML =
+      '<img src="" alt="Preview" class="w-32 h-32 object-cover object-center rounded" />'
+    document.body.appendChild(tooltip)
+  }
+  return tooltip
+}
+
+// Add tooltip event listeners
+function setupTooltipListeners() {
+  const tooltip = createTooltip()
+  const tooltipImg = tooltip.querySelector('img')
+
+  document.addEventListener('mouseover', e => {
+    const imagePreview = e.target.closest('[data-image-preview]')
+    if (imagePreview) {
+      const rect = imagePreview.getBoundingClientRect()
+      const imageUrl = imagePreview.dataset.imagePreview
+
+      tooltipImg.src = imageUrl
+      tooltip.style.left = `${rect.left - 138}px`
+      tooltip.style.top = `${rect.top}px`
+      tooltip.classList.remove('hidden')
+      tooltip.classList.add('block')
+    }
+  })
+
+  document.addEventListener('mouseout', e => {
+    const imagePreview = e.target.closest('[data-image-preview]')
+    if (imagePreview) {
+      tooltip.classList.remove('block')
+      tooltip.classList.add('hidden')
+    }
+  })
+
+  // Add click handler for opening image in new tab
+  document.addEventListener('click', e => {
+    const imagePreview = e.target.closest('[data-image-preview]')
+    if (imagePreview) {
+      e.preventDefault()
+      e.stopPropagation()
+      const imageUrl = imagePreview.dataset.imagePreview
+      window.open(imageUrl, '_blank')
+    }
+  })
+}
+
+// Initialize tooltip listeners
+setupTooltipListeners()
